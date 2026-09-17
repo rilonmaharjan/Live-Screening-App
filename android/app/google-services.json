@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "673232481067",
+    "project_id": "live-screening-app",
+    "storage_bucket": "live-screening-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:673232481067:android:977aa2802bf73958a3b36e",
+        "android_client_info": {
+          "package_name": "com.example.rndscreeningap"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCLL3OITsqhvXoBfwQUcFQEtaCoiribE7w"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

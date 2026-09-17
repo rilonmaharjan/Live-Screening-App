@@ -2,7 +2,6 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import '../models/mirror_protocol.dart';
-import 'network_service.dart';
 
 class ActiveTouchPoint {
   final int id;
@@ -21,14 +20,15 @@ class ActiveTouchPoint {
 }
 
 class GestureTrackerController extends ChangeNotifier {
-  final WebSocketServerService serverService;
+  final IBroadcastService broadcastService;
   final Map<int, ActiveTouchPoint> _activeTouches = {};
   final List<GesturePacket> _recentGesturesLog = [];
+  int _lastMoveBroadcastMs = 0;
 
   Map<int, ActiveTouchPoint> get activeTouches => Map.unmodifiable(_activeTouches);
   List<GesturePacket> get recentGesturesLog => List.unmodifiable(_recentGesturesLog);
 
-  GestureTrackerController({required this.serverService});
+  GestureTrackerController({required this.broadcastService});
 
   void handlePointerDown(PointerDownEvent event, Size screenSize) {
     if (screenSize.width <= 0 || screenSize.height <= 0) return;
@@ -76,17 +76,23 @@ class GestureTrackerController extends ChangeNotifier {
 
     _activeTouches[event.pointer] = touch;
 
-    final packet = GesturePacket(
-      action: PointerAction.move,
-      pointerId: event.pointer,
-      normalizedX: normX,
-      normalizedY: normY,
-      timestamp: DateTime.now().millisecondsSinceEpoch,
-      deviceWidth: screenSize.width,
-      deviceHeight: screenSize.height,
-    );
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    // Throttle drag pointer move broadcasts to at most once per 50ms (~20 FPS)
+    if (nowMs - _lastMoveBroadcastMs >= 50) {
+      _lastMoveBroadcastMs = nowMs;
 
-    _broadcastGesture(packet);
+      final packet = GesturePacket(
+        action: PointerAction.move,
+        pointerId: event.pointer,
+        normalizedX: normX,
+        normalizedY: normY,
+        timestamp: nowMs,
+        deviceWidth: screenSize.width,
+        deviceHeight: screenSize.height,
+      );
+
+      _broadcastGesture(packet);
+    }
     notifyListeners();
   }
 
@@ -160,9 +166,9 @@ class GestureTrackerController extends ChangeNotifier {
       _recentGesturesLog.removeLast();
     }
 
-    // Broadcast over WebSocket to Device B
-    if (serverService.isHosting && serverService.clientCount > 0) {
-      serverService.broadcast(packet.toJson().toString());
+    // Broadcast over Firebase Cloud Firestore to Device B
+    if (broadcastService.isHosting) {
+      broadcastService.broadcastGesture(packet);
     }
   }
 }

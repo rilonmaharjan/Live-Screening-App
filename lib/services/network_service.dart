@@ -49,7 +49,7 @@ class IPHelper {
   }
 }
 
-class WebSocketServerService {
+class WebSocketServerService implements IBroadcastService {
   HttpServer? _server;
   final List<WebSocket> _connectedClients = [];
   int _port = 8080;
@@ -61,10 +61,31 @@ class WebSocketServerService {
   Function(GesturePacket gesture)? onGestureReceived;
   Function(String log)? onLog;
 
+  @override
   bool get isHosting => _isHosting;
   String get serverIp => _serverIp;
   int get port => _port;
   int get clientCount => _connectedClients.length;
+
+  @override
+  Future<void> broadcastFrame(FramePacket frame) async {
+    if (!_isHosting || _connectedClients.isEmpty) return;
+    try {
+      broadcast(frame.toBase64Json());
+    } catch (e) {
+      // Ignore broadcast socket error
+    }
+  }
+
+  @override
+  Future<void> broadcastGesture(GesturePacket gesture) async {
+    if (!_isHosting || _connectedClients.isEmpty) return;
+    try {
+      broadcast(jsonEncode(gesture.toJson()));
+    } catch (e) {
+      // Ignore broadcast socket error
+    }
+  }
 
   Future<bool> startServer({int port = 8080}) async {
     if (kIsWeb) {
@@ -366,6 +387,12 @@ class WebSocketClientService {
 
   Future<bool> connect(String ipAddress, {int port = 8080}) async {
     String cleaned = ipAddress.trim();
+    if (cleaned.isEmpty || cleaned.endsWith('.')) {
+      _isConnected = false;
+      onStatusChanged?.call(false, 'Please enter a valid IP address');
+      return false;
+    }
+
     // Remove protocol schemes if user pasted URL
     cleaned = cleaned.replaceAll(RegExp(r'^https?://|^wss?://'), '');
 
@@ -384,9 +411,19 @@ class WebSocketClientService {
 
     try {
       final wsUri = Uri.parse('ws://$_targetIp:$_port');
-      _channel = WebSocketChannel.connect(wsUri);
-      
-      _subscription = _channel!.stream.listen(
+      final channel = WebSocketChannel.connect(wsUri);
+      _channel = channel;
+
+      // Await socket connection readiness to catch async WebSocket handshake errors gracefully
+      try {
+        await channel.ready;
+      } catch (e) {
+        _isConnected = false;
+        onStatusChanged?.call(false, 'Connection failed: Cannot reach ws://$_targetIp:$_port');
+        return false;
+      }
+
+      _subscription = channel.stream.listen(
         (data) {
           if (!_isConnected) {
             _isConnected = true;
@@ -405,8 +442,7 @@ class WebSocketClientService {
           onStatusChanged?.call(false, 'Connection error: $err');
         },
       );
-      
-      // Mark connected
+
       _isConnected = true;
       onStatusChanged?.call(true, 'Connected to Device A!');
       return true;

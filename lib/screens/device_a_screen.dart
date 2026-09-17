@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../models/mirror_protocol.dart';
+import '../services/firebase_service.dart';
 import '../services/frame_streamer.dart';
 import '../services/gesture_tracker.dart';
 import '../services/network_service.dart';
@@ -8,77 +10,152 @@ import '../theme/app_theme.dart';
 import '../widgets/interactive_showcase.dart';
 
 class DeviceABroadcasterScreen extends StatefulWidget {
-  const DeviceABroadcasterScreen({super.key});
+  final TransportMode transportMode;
+
+  const DeviceABroadcasterScreen({
+    super.key,
+    this.transportMode = TransportMode.webSocket,
+  });
 
   @override
   State<DeviceABroadcasterScreen> createState() => _DeviceABroadcasterScreenState();
 }
 
 class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
-  final WebSocketServerService _serverService = WebSocketServerService();
+  late IBroadcastService _broadcastService;
+  WebSocketServerService? _wsService;
+  FirebaseBroadcastService? _fbService;
+
   late FrameStreamerController _frameStreamer;
   late GestureTrackerController _gestureTracker;
 
-  String _serverIp = '0.0.0.0';
-  int _clientCount = 0;
+  final TextEditingController _channelController = TextEditingController(text: 'live_stream');
   final List<String> _serverLogs = [];
   bool _showConnectionSheet = false;
+  String _statusText = 'Initializing...';
+  bool _isBroadcasting = false;
+  int _clientCount = 0;
 
   @override
   void initState() {
     super.initState();
-    _frameStreamer = FrameStreamerController(serverService: _serverService);
-    _gestureTracker = GestureTrackerController(serverService: _serverService);
-
-    _setupServer();
+    _initService();
   }
 
-  Future<void> _setupServer() async {
-    _serverService.onClientCountChanged = (count) {
-      if (mounted) {
-        setState(() {
-          _clientCount = count;
-        });
-        if (count > 0 && !_frameStreamer.isStreaming) {
-          _frameStreamer.startStreaming(fps: 24);
-        } else if (count == 0) {
-          _frameStreamer.stopStreaming();
+  void _initService() {
+    if (widget.transportMode == TransportMode.webSocket) {
+      _wsService = WebSocketServerService();
+      _broadcastService = _wsService!;
+    } else {
+      _fbService = FirebaseBroadcastService();
+      _broadcastService = _fbService!;
+    }
+
+    _frameStreamer = FrameStreamerController(broadcastService: _broadcastService);
+    _gestureTracker = GestureTrackerController(broadcastService: _broadcastService);
+
+    _setupBroadcast();
+  }
+
+  Future<void> _setupBroadcast() async {
+    if (widget.transportMode == TransportMode.webSocket && _wsService != null) {
+      _wsService!.onClientCountChanged = (count) {
+        if (mounted) {
+          setState(() {
+            _clientCount = count;
+            _statusText = 'Clients Connected: $count';
+          });
         }
-      }
-    };
+      };
 
-    _serverService.onLog = (log) {
+      _wsService!.onLog = (log) {
+        if (mounted) {
+          setState(() {
+            _serverLogs.insert(0, log);
+            if (_serverLogs.length > 20) _serverLogs.removeLast();
+          });
+        }
+      };
+
+      final success = await _wsService!.startServer(port: 8080);
       if (mounted) {
         setState(() {
-          _serverLogs.insert(0, log);
-          if (_serverLogs.length > 20) _serverLogs.removeLast();
+          _isBroadcasting = success;
+          if (success) {
+            _statusText = 'WebSocket Server: ws://${_wsService!.serverIp}:${_wsService!.port}';
+            _frameStreamer.startStreaming(fps: 8);
+          } else {
+            _statusText = 'Failed to start WebSocket server';
+          }
         });
       }
-    };
+    } else if (widget.transportMode == TransportMode.firebase && _fbService != null) {
+      _fbService!.onStatusChanged = (active, status) {
+        if (mounted) {
+          setState(() {
+            _isBroadcasting = active;
+            _statusText = status;
+          });
+          if (active && !_frameStreamer.isStreaming) {
+            _frameStreamer.startStreaming(fps: 8);
+          }
+        }
+      };
 
-    await _serverService.startServer();
-    if (mounted) {
-      setState(() {
-        _serverIp = _serverService.serverIp;
-      });
+      _fbService!.onLog = (log) {
+        if (mounted) {
+          setState(() {
+            _serverLogs.insert(0, log);
+            if (_serverLogs.length > 20) _serverLogs.removeLast();
+          });
+        }
+      };
+
+      await _fbService!.startBroadcasting(channelId: _channelController.text.trim());
     }
   }
 
   @override
   void dispose() {
     _frameStreamer.stopStreaming();
-    _serverService.stopServer();
+    if (_wsService != null) {
+      _wsService!.stopServer();
+    }
+    if (_fbService != null) {
+      _fbService!.stopBroadcasting();
+    }
+    _channelController.dispose();
     super.dispose();
+  }
+
+  String get _qrData {
+    if (widget.transportMode == TransportMode.webSocket && _wsService != null) {
+      return '${_wsService!.serverIp}:${_wsService!.port}';
+    } else if (_fbService != null) {
+      return _fbService!.channelId;
+    }
+    return '127.0.0.1:8080';
+  }
+
+  String get _displayAddress {
+    if (widget.transportMode == TransportMode.webSocket && _wsService != null) {
+      return '${_wsService!.serverIp}:${_wsService!.port}';
+    } else if (_fbService != null) {
+      return _fbService!.channelId;
+    }
+    return 'live_stream';
   }
 
   @override
   Widget build(BuildContext context) {
     final screenSize = MediaQuery.of(context).size;
-    final serverUrl = 'ws://$_serverIp:${_serverService.port}';
+    final isWebSocket = widget.transportMode == TransportMode.webSocket;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Device A: Broadcaster'),
+        title: Text(
+          isWebSocket ? 'Device A: Broadcaster (WebSocket IP)' : 'Device A: Broadcaster (Firebase Cloud)',
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.info_outline_rounded),
@@ -117,7 +194,7 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
             ),
           ),
 
-          // 2. Floating Server Telemetry & Status Bar Overlay
+          // 2. Floating Status Bar Overlay
           Positioned(
             top: 10,
             left: 10,
@@ -125,9 +202,11 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
               decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.8),
+                color: Colors.black.withValues(alpha: 0.85),
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                border: Border.all(
+                  color: (isWebSocket ? AppColors.secondary : AppColors.primary).withValues(alpha: 0.4),
+                ),
                 boxShadow: const [
                   BoxShadow(color: Colors.black45, blurRadius: 8),
                 ],
@@ -139,7 +218,7 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
                     height: 10,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: _clientCount > 0 ? AppColors.success : AppColors.warning,
+                      color: _isBroadcasting ? AppColors.success : AppColors.warning,
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -149,9 +228,11 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Text(
-                          _clientCount > 0
-                              ? 'STREAMING LIVE to $_clientCount Receiver(s)'
-                              : 'HOSTING at $_serverIp:${_serverService.port}',
+                          _isBroadcasting
+                              ? (isWebSocket
+                                  ? 'WEBSOCKET HOST ACTIVE: $_displayAddress'
+                                  : 'FIREBASE STREAM ACTIVE: ${_fbService?.channelId}')
+                              : _statusText,
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 12,
@@ -159,7 +240,9 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
                           ),
                         ),
                         Text(
-                          'FPS: ${_frameStreamer.currentFps.toStringAsFixed(0)} / ${_frameStreamer.targetFps} | Gestures Logged: ${_gestureTracker.recentGesturesLog.length}',
+                          isWebSocket
+                              ? 'Connected Clients: $_clientCount | FPS: ${_frameStreamer.currentFps.toStringAsFixed(0)} / ${_frameStreamer.targetFps}'
+                              : 'FPS: ${_frameStreamer.currentFps.toStringAsFixed(0)} / ${_frameStreamer.targetFps} | Gestures Logged: ${_gestureTracker.recentGesturesLog.length}',
                           style: const TextStyle(
                             color: AppColors.textSecondary,
                             fontSize: 10,
@@ -169,20 +252,20 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
                     ),
                   ),
                   TextButton.icon(
-                    onPressed: () => _showPairingDialog(context, serverUrl),
+                    onPressed: () => _showConnectionDialog(context),
                     style: TextButton.styleFrom(
-                      foregroundColor: AppColors.secondary,
+                      foregroundColor: isWebSocket ? AppColors.secondary : AppColors.primaryLight,
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     ),
-                    icon: const Icon(Icons.qr_code, size: 16),
-                    label: const Text('Pair IP', style: TextStyle(fontSize: 11)),
+                    icon: Icon(isWebSocket ? Icons.qr_code_scanner_rounded : Icons.qr_code_rounded, size: 16),
+                    label: Text(isWebSocket ? 'IP Address' : 'Channel ID', style: const TextStyle(fontSize: 11)),
                   ),
                 ],
               ),
             ),
           ),
 
-          // 3. Optional Bottom Sliding Logs Drawer
+          // 3. Bottom Sliding Logs Drawer
           if (_showConnectionSheet)
             Positioned(
               bottom: 0,
@@ -202,9 +285,9 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        const Text(
-                          'Server Logs & Target FPS',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                        Text(
+                          isWebSocket ? 'WebSocket Server Logs & Controls' : 'Firebase Stream Logs & FPS',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                         ),
                         Row(
                           children: [
@@ -213,9 +296,9 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
                               value: _frameStreamer.targetFps,
                               dropdownColor: AppColors.surface,
                               items: const [
-                                DropdownMenuItem(value: 15, child: Text('15 FPS')),
-                                DropdownMenuItem(value: 24, child: Text('24 FPS')),
-                                DropdownMenuItem(value: 30, child: Text('30 FPS')),
+                                DropdownMenuItem(value: 4, child: Text('4 FPS')),
+                                DropdownMenuItem(value: 8, child: Text('8 FPS')),
+                                DropdownMenuItem(value: 12, child: Text('12 FPS')),
                               ],
                               onChanged: (val) {
                                 if (val != null) {
@@ -256,26 +339,33 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
     );
   }
 
-  void _showPairingDialog(BuildContext context, String serverUrl) {
+  void _showConnectionDialog(BuildContext context) {
+    final isWebSocket = widget.transportMode == TransportMode.webSocket;
+
     showDialog(
       context: context,
       builder: (context) {
         return AlertDialog(
           backgroundColor: AppColors.surface,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Row(
+          title: Row(
             children: [
-              Icon(Icons.wifi_tethering_rounded, color: AppColors.secondary),
-              SizedBox(width: 10),
-              Text('Device A Host Address'),
+              Icon(
+                isWebSocket ? Icons.lan_rounded : Icons.cloud_sync_rounded,
+                color: isWebSocket ? AppColors.secondary : AppColors.primary,
+              ),
+              const SizedBox(width: 10),
+              Text(isWebSocket ? 'WebSocket IP Host Code' : 'Firebase Channel Code'),
             ],
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                'Enter this IP address on Device B (Mobile or Windows) to start receiving live screen & gesture mirror:',
-                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              Text(
+                isWebSocket
+                    ? 'Enter this IP address on Device B app or open in any web browser to view live stream:'
+                    : 'Enter this Channel ID on Device B (Mobile, Web, or Desktop) to join live mirror stream:',
+                style: const TextStyle(fontSize: 13, color: AppColors.textSecondary),
               ),
               const SizedBox(height: 16),
               Container(
@@ -283,15 +373,17 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
                 decoration: BoxDecoration(
                   color: AppColors.background,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.primary.withValues(alpha: 0.5)),
+                  border: Border.all(
+                    color: (isWebSocket ? AppColors.secondary : AppColors.primary).withValues(alpha: 0.5),
+                  ),
                 ),
                 child: SelectableText(
-                  _serverIp,
-                  style: const TextStyle(
-                    fontSize: 22,
+                  _displayAddress,
+                  style: TextStyle(
+                    fontSize: 20,
                     fontWeight: FontWeight.bold,
-                    color: AppColors.primaryLight,
-                    letterSpacing: 1.2,
+                    color: isWebSocket ? AppColors.secondary : AppColors.primaryLight,
+                    letterSpacing: 1.1,
                   ),
                 ),
               ),
@@ -303,7 +395,7 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
                   borderRadius: BorderRadius.circular(16),
                 ),
                 child: QrImageView(
-                  data: _serverIp,
+                  data: isWebSocket ? 'http://$_displayAddress' : _qrData,
                   version: QrVersions.auto,
                   size: 160.0,
                   dataModuleStyle: const QrDataModuleStyle(
@@ -318,7 +410,9 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
               ),
               const SizedBox(height: 12),
               Text(
-                'WebSocket Server: $serverUrl',
+                isWebSocket
+                    ? 'Scan QR with phone camera or browser to view live stream'
+                    : 'Firebase Cloud Firestore Stream Channel',
                 style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
               ),
             ],

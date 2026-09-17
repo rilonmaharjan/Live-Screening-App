@@ -1,6 +1,17 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+enum TransportMode {
+  webSocket,
+  firebase,
+}
+
+abstract class IBroadcastService {
+  bool get isHosting;
+  Future<void> broadcastFrame(FramePacket frame);
+  Future<void> broadcastGesture(GesturePacket gesture);
+}
+
 enum PointerAction {
   down,
   move,

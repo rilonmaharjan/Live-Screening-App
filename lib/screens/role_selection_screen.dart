@@ -1,14 +1,24 @@
 import 'package:flutter/material.dart';
-import '../theme/app_theme.dart';
 
+import '../models/mirror_protocol.dart';
+import '../theme/app_theme.dart';
 import 'device_a_screen.dart';
 import 'device_b_screen.dart';
 
-class RoleSelectionScreen extends StatelessWidget {
+class RoleSelectionScreen extends StatefulWidget {
   const RoleSelectionScreen({super.key});
 
   @override
+  State<RoleSelectionScreen> createState() => _RoleSelectionScreenState();
+}
+
+class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
+  TransportMode _selectedMode = TransportMode.webSocket;
+
+  @override
   Widget build(BuildContext context) {
+    final isWebSocket = _selectedMode == TransportMode.webSocket;
+
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -20,85 +30,123 @@ class RoleSelectionScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const SizedBox(height: 30),
+                const SizedBox(height: 16),
                 // App Logo & Header
                 Center(
                   child: Container(
-                    padding: const EdgeInsets.all(20),
+                    padding: const EdgeInsets.all(18),
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      gradient: AppColors.primaryGradient,
+                      gradient: isWebSocket ? AppColors.cyanGradient : AppColors.primaryGradient,
                       boxShadow: [
                         BoxShadow(
-                          color: AppColors.primary.withValues(alpha: 0.5),
+                          color: (isWebSocket ? AppColors.secondary : AppColors.primary).withValues(alpha: 0.5),
                           blurRadius: 25,
                           spreadRadius: 2,
                         ),
                       ],
                     ),
-                    child: const Icon(
-                      Icons.cast_connected_rounded,
-                      size: 56,
+                    child: Icon(
+                      isWebSocket ? Icons.lan_rounded : Icons.cloud_done_rounded,
+                      size: 48,
                       color: Colors.white,
                     ),
                   ),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 16),
                 const Text(
                   'Live Screen Mirroring\n& Gesture Sync',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 28,
+                    fontSize: 26,
                     fontWeight: FontWeight.w800,
                     height: 1.2,
                     color: AppColors.textPrimary,
                   ),
                 ),
-                const SizedBox(height: 10),
-                const Text(
-                  'Detect live taps, drags, and scrolls on Device A and view them in real-time on Device B (Mobile or Windows).',
+                const SizedBox(height: 8),
+                Text(
+                  isWebSocket
+                      ? 'Detect live taps & drags on Device A and mirror in real-time over Local Wi-Fi / IP WebSocket (Mobile, Web Browser, or Desktop).'
+                      : 'Detect live taps & drags on Device A and sync over Firebase Cloud Firestore across any internet network.',
                   textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 14,
+                  style: const TextStyle(
+                    fontSize: 13,
                     color: AppColors.textSecondary,
                   ),
                 ),
+                const SizedBox(height: 20),
+
+                // Transport Protocol Mode Selector Switcher
+                Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: _buildModeTab(
+                          mode: TransportMode.webSocket,
+                          label: 'WebSocket (IP)',
+                          icon: Icons.wifi_rounded,
+                          color: AppColors.secondary,
+                        ),
+                      ),
+                      Expanded(
+                        child: _buildModeTab(
+                          mode: TransportMode.firebase,
+                          label: 'Firebase (Cloud)',
+                          icon: Icons.cloud_outlined,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
                 const Spacer(),
 
                 // Role Options
                 _buildRoleCard(
                   context,
-                  title: 'Device A: Broadcaster',
-                  subtitle: 'Stream screen frames and capture live touch/scroll gestures on this mobile device.',
-                  badgeText: 'HOST / SENDER',
-                  badgeColor: AppColors.primary,
+                  title: isWebSocket ? 'Device A: WebSocket Broadcaster' : 'Device A: Firebase Broadcaster',
+                  subtitle: isWebSocket
+                      ? 'Start local IP WebSocket server (ws://ip:port) and host built-in Web Viewer for web browsers.'
+                      : 'Stream screen frames and capture live touch/scroll gestures via Firebase Cloud Firestore.',
+                  badgeText: isWebSocket ? 'HOST / SENDER (LOCAL IP)' : 'HOST / SENDER (FIREBASE CLOUD)',
+                  badgeColor: isWebSocket ? AppColors.secondary : AppColors.primary,
                   icon: Icons.phonelink_setup_rounded,
-                  gradient: AppColors.primaryGradient,
+                  gradient: isWebSocket ? AppColors.cyanGradient : AppColors.primaryGradient,
                   onTap: () {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => const DeviceABroadcasterScreen(),
+                        builder: (_) => DeviceABroadcasterScreen(transportMode: _selectedMode),
                       ),
                     );
                   },
                 ),
 
-                const SizedBox(height: 20),
+                const SizedBox(height: 16),
 
                 _buildRoleCard(
                   context,
-                  title: 'Device B: Receiver',
-                  subtitle: 'Connect via Wi-Fi IP to view Device A screen with live tap ripples and scroll indicators.',
-                  badgeText: 'VIEWER (MOBILE / WINDOWS)',
-                  badgeColor: AppColors.secondary,
+                  title: isWebSocket ? 'Device B: WebSocket Receiver' : 'Device B: Firebase Receiver',
+                  subtitle: isWebSocket
+                      ? 'Connect directly using Host IP address (e.g. 192.168.1.50:8080) for high-speed local screening.'
+                      : 'Connect via Firebase Channel ID to view Device A screen with live tap ripples and scroll indicators.',
+                  badgeText: isWebSocket ? 'VIEWER (WEBSOCKET IP)' : 'VIEWER (FIREBASE CLOUD)',
+                  badgeColor: isWebSocket ? AppColors.secondary : AppColors.primary,
                   icon: Icons.desktop_windows_rounded,
-                  gradient: AppColors.cyanGradient,
+                  gradient: isWebSocket ? AppColors.cyanGradient : AppColors.primaryGradient,
                   onTap: () {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => const DeviceBReceiverScreen(),
+                        builder: (_) => DeviceBReceiverScreen(transportMode: _selectedMode),
                       ),
                     );
                   },
@@ -110,14 +158,21 @@ class RoleSelectionScreen extends StatelessWidget {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.wifi_rounded, size: 16, color: AppColors.success.withValues(alpha: 0.8)),
+                    Icon(
+                      isWebSocket ? Icons.bolt_rounded : Icons.cloud_done_rounded,
+                      size: 16,
+                      color: isWebSocket ? AppColors.secondary : AppColors.success,
+                    ),
                     const SizedBox(width: 6),
                     Text(
-                      'Requires Direct Local Wi-Fi Network',
+                      isWebSocket
+                          ? 'WebSocket IP Direct Mode • Ultra Low Latency'
+                          : 'Powered by Firebase Cloud Firestore Sync',
                       style: TextStyle(
                         fontSize: 12,
                         color: AppColors.textSecondary.withValues(alpha: 0.8),
                       ),
+                      textAlign: TextAlign.center,
                     ),
                   ],
                 ),
@@ -125,6 +180,50 @@ class RoleSelectionScreen extends StatelessWidget {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildModeTab({
+    required TransportMode mode,
+    required String label,
+    required IconData icon,
+    required Color color,
+  }) {
+    final isSelected = _selectedMode == mode;
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedMode = mode;
+        });
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: isSelected ? color.withValues(alpha: 0.2) : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+          border: isSelected ? Border.all(color: color.withValues(alpha: 0.6)) : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 18,
+              color: isSelected ? color : AppColors.textSecondary,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                color: isSelected ? Colors.white : AppColors.textSecondary,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -146,7 +245,7 @@ class RoleSelectionScreen extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(20),
         child: Container(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
             color: AppColors.surface,
             borderRadius: BorderRadius.circular(20),
@@ -170,7 +269,7 @@ class RoleSelectionScreen extends StatelessWidget {
                   gradient: gradient,
                   borderRadius: BorderRadius.circular(16),
                 ),
-                child: Icon(icon, size: 32, color: Colors.white),
+                child: Icon(icon, size: 30, color: Colors.white),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -196,7 +295,7 @@ class RoleSelectionScreen extends StatelessWidget {
                     Text(
                       title,
                       style: const TextStyle(
-                        fontSize: 17,
+                        fontSize: 16,
                         fontWeight: FontWeight.bold,
                         color: AppColors.textPrimary,
                       ),

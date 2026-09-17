@@ -3,20 +3,28 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../models/mirror_protocol.dart';
+import '../services/firebase_service.dart';
 import '../services/network_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/gesture_overlay_painter.dart';
 
 class DeviceBReceiverScreen extends StatefulWidget {
-  const DeviceBReceiverScreen({super.key});
+  final TransportMode transportMode;
+
+  const DeviceBReceiverScreen({
+    super.key,
+    this.transportMode = TransportMode.webSocket,
+  });
 
   @override
   State<DeviceBReceiverScreen> createState() => _DeviceBReceiverScreenState();
 }
 
 class _DeviceBReceiverScreenState extends State<DeviceBReceiverScreen> {
-  final WebSocketClientService _clientService = WebSocketClientService();
-  final TextEditingController _ipController = TextEditingController();
+  WebSocketClientService? _wsClient;
+  FirebaseBroadcastService? _fbService;
+
+  late TextEditingController _addressController;
 
   bool _isConnected = false;
   String _statusMessage = 'Disconnected';
@@ -41,42 +49,16 @@ class _DeviceBReceiverScreenState extends State<DeviceBReceiverScreen> {
   @override
   void initState() {
     super.initState();
-    _initIpField();
 
-    _clientService.onStatusChanged = (connected, status) {
-      if (mounted) {
-        setState(() {
-          _isConnected = connected;
-          _statusMessage = status;
-        });
-      }
-    };
+    final defaultText = widget.transportMode == TransportMode.webSocket
+        ? '192.168.1.'
+        : 'live_stream';
+    _addressController = TextEditingController(text: defaultText);
+    _addressController.selection = TextSelection.fromPosition(
+      TextPosition(offset: defaultText.length),
+    );
 
-    _clientService.onFrameReceived = (frame) {
-      if (mounted) {
-        final now = DateTime.now().millisecondsSinceEpoch;
-        final latency = now - frame.timestamp;
-        setState(() {
-          _currentFrame = frame;
-          _receivedFramesCount++;
-          _latencyMs = latency.clamp(0, 5000);
-        });
-      }
-    };
-
-    _clientService.onGestureReceived = (gesture) {
-      if (mounted) {
-        setState(() {
-          if (gesture.action == PointerAction.scroll) {
-            _latestScrollGesture = gesture;
-          } else if (gesture.action == PointerAction.up || gesture.action == PointerAction.cancel) {
-            _activeGestures.remove(gesture.pointerId);
-          } else {
-            _activeGestures[gesture.pointerId] = gesture;
-          }
-        });
-      }
-    };
+    _initReceiver();
 
     // Calculate FPS timer
     _fpsTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -90,44 +72,128 @@ class _DeviceBReceiverScreenState extends State<DeviceBReceiverScreen> {
         });
       }
     });
+
+    if (widget.transportMode == TransportMode.firebase) {
+      _connect();
+    } else {
+      _statusMessage = 'Enter Host IP (e.g. 192.168.1.50:8080) and tap Connect';
+    }
   }
 
-  Future<void> _initIpField() async {
-    final localIp = await IPHelper.getLocalIPAddress();
-    if (localIp != '127.0.0.1') {
-      final parts = localIp.split('.');
-      if (parts.length == 4) {
-        // Pre-fill IP subnet for convenience
-        _ipController.text = '${parts[0]}.${parts[1]}.${parts[2]}.';
-      }
+  void _initReceiver() {
+    if (widget.transportMode == TransportMode.webSocket) {
+      _wsClient = WebSocketClientService();
+
+      _wsClient!.onStatusChanged = (connected, status) {
+        if (mounted) {
+          setState(() {
+            _isConnected = connected;
+            _statusMessage = status;
+          });
+        }
+      };
+
+      _wsClient!.onFrameReceived = (frame) {
+        if (mounted) {
+          final now = DateTime.now().millisecondsSinceEpoch;
+          final latency = now - frame.timestamp;
+          setState(() {
+            _currentFrame = frame;
+            _receivedFramesCount++;
+            _latencyMs = latency.clamp(0, 5000);
+          });
+        }
+      };
+
+      _wsClient!.onGestureReceived = (gesture) {
+        _handleIncomingGesture(gesture);
+      };
     } else {
-      _ipController.text = '192.168.1.';
+      _fbService = FirebaseBroadcastService();
+
+      _fbService!.onStatusChanged = (connected, status) {
+        if (mounted) {
+          setState(() {
+            _isConnected = connected;
+            _statusMessage = status;
+          });
+        }
+      };
+
+      _fbService!.onFrameReceived = (frame) {
+        if (mounted) {
+          final now = DateTime.now().millisecondsSinceEpoch;
+          final latency = now - frame.timestamp;
+          setState(() {
+            _currentFrame = frame;
+            _receivedFramesCount++;
+            _latencyMs = latency.clamp(0, 5000);
+          });
+        }
+      };
+
+      _fbService!.onGestureReceived = (gesture) {
+        _handleIncomingGesture(gesture);
+      };
+    }
+  }
+
+  void _handleIncomingGesture(GesturePacket gesture) {
+    if (mounted) {
+      setState(() {
+        if (gesture.action == PointerAction.scroll) {
+          _latestScrollGesture = gesture;
+        } else if (gesture.action == PointerAction.up || gesture.action == PointerAction.cancel) {
+          _activeGestures.remove(gesture.pointerId);
+        } else {
+          _activeGestures[gesture.pointerId] = gesture;
+        }
+      });
     }
   }
 
   @override
   void dispose() {
     _fpsTimer?.cancel();
-    _clientService.disconnect();
-    _ipController.dispose();
+    if (_wsClient != null) {
+      _wsClient!.disconnect();
+    }
+    if (_fbService != null) {
+      _fbService!.disconnect();
+    }
+    _addressController.dispose();
     super.dispose();
+  }
+
+  Future<void> _connect() async {
+    final target = _addressController.text.trim();
+    if (target.isEmpty) return;
+
+    if (widget.transportMode == TransportMode.webSocket && _wsClient != null) {
+      await _wsClient!.connect(target);
+    } else if (_fbService != null) {
+      await _fbService!.connectToBroadcast(channelId: target);
+    }
   }
 
   Future<void> _toggleConnect() async {
     if (_isConnected) {
-      await _clientService.disconnect();
+      if (_wsClient != null) await _wsClient!.disconnect();
+      if (_fbService != null) await _fbService!.disconnect();
     } else {
-      final targetIp = _ipController.text.trim();
-      if (targetIp.isEmpty) return;
-      await _clientService.connect(targetIp);
+      await _connect();
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final isWebSocket = widget.transportMode == TransportMode.webSocket;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Device B: Receiver Viewer'),
+        title: Text(
+          isWebSocket ? 'Device B: Receiver (WebSocket IP)' : 'Device B: Receiver (Firebase Cloud)',
+        ),
         actions: [
           IconButton(
             icon: Icon(
@@ -151,7 +217,7 @@ class _DeviceBReceiverScreenState extends State<DeviceBReceiverScreen> {
       ),
       body: Column(
         children: [
-          // 1. IP Connection Header Bar
+          // 1. Connection Target Input Bar
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             color: AppColors.surface,
@@ -159,13 +225,19 @@ class _DeviceBReceiverScreenState extends State<DeviceBReceiverScreen> {
               children: [
                 Expanded(
                   child: TextField(
-                    controller: _ipController,
+                    controller: _addressController,
                     enabled: !_isConnected,
                     style: const TextStyle(fontSize: 14),
-                    decoration: const InputDecoration(
-                      hintText: 'Device A IP Address (e.g. 192.168.1.50)',
+                    decoration: InputDecoration(
+                      hintText: isWebSocket
+                          ? 'Host IP Address (e.g. 192.168.1.50:8080)'
+                          : 'Firebase Channel ID (e.g. live_stream)',
                       isDense: true,
-                      prefixIcon: Icon(Icons.wifi_rounded, size: 20),
+                      prefixIcon: Icon(
+                        isWebSocket ? Icons.lan_rounded : Icons.cloud_queue_rounded,
+                        size: 20,
+                        color: isWebSocket ? AppColors.secondary : AppColors.primaryLight,
+                      ),
                     ),
                   ),
                 ),
@@ -173,7 +245,9 @@ class _DeviceBReceiverScreenState extends State<DeviceBReceiverScreen> {
                 ElevatedButton.icon(
                   onPressed: _toggleConnect,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: _isConnected ? AppColors.accent : AppColors.primary,
+                    backgroundColor: _isConnected
+                        ? AppColors.accent
+                        : (isWebSocket ? AppColors.secondary : AppColors.primary),
                   ),
                   icon: Icon(_isConnected ? Icons.link_off_rounded : Icons.link_rounded),
                   label: Text(_isConnected ? 'Disconnect' : 'Connect'),
@@ -224,15 +298,21 @@ class _DeviceBReceiverScreenState extends State<DeviceBReceiverScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(
-                          _isConnected ? Icons.screen_search_desktop_rounded : Icons.phonelink_erase_rounded,
+                          _isConnected
+                              ? (isWebSocket ? Icons.wifi_tethering_rounded : Icons.cloud_sync_rounded)
+                              : (isWebSocket ? Icons.wifi_off_rounded : Icons.cloud_off_rounded),
                           size: 64,
                           color: AppColors.textSecondary.withValues(alpha: 0.5),
                         ),
                         const SizedBox(height: 16),
                         Text(
                           _isConnected
-                              ? 'Connected to Device A!\nWaiting for live screen frames...'
-                              : 'Enter Device A IPv4 address above and tap Connect.',
+                              ? (isWebSocket
+                                  ? 'Connected to WebSocket Host!\nWaiting for live screen frames...'
+                                  : 'Connected to Firebase Channel!\nWaiting for live screen frames...')
+                              : (isWebSocket
+                                  ? 'Enter Host IP Address (e.g. 192.168.1.50:8080) and tap Connect.'
+                                  : 'Enter Firebase Channel ID above and tap Connect.'),
                           textAlign: TextAlign.center,
                           style: const TextStyle(color: AppColors.textSecondary, fontSize: 14),
                         ),
@@ -250,19 +330,21 @@ class _DeviceBReceiverScreenState extends State<DeviceBReceiverScreen> {
                       decoration: BoxDecoration(
                         color: Colors.black.withValues(alpha: 0.85),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: AppColors.secondary.withValues(alpha: 0.4)),
+                        border: Border.all(
+                          color: (isWebSocket ? AppColors.secondary : AppColors.primary).withValues(alpha: 0.4),
+                        ),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          const Row(
+                          Row(
                             children: [
-                              CircleAvatar(radius: 4, backgroundColor: AppColors.success),
-                              SizedBox(width: 6),
+                              const CircleAvatar(radius: 4, backgroundColor: AppColors.success),
+                              const SizedBox(width: 6),
                               Text(
-                                'MIRROR STREAM LIVE',
-                                style: TextStyle(
+                                isWebSocket ? 'WEBSOCKET STREAM LIVE' : 'FIREBASE STREAM LIVE',
+                                style: const TextStyle(
                                   color: AppColors.success,
                                   fontWeight: FontWeight.bold,
                                   fontSize: 11,
