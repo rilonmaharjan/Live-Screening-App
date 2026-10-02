@@ -158,15 +158,18 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
                               color: isWebSocket ? AppColors.secondary : AppColors.success,
                             ),
                             const SizedBox(width: 6),
-                            Text(
-                              isWebSocket
-                                  ? 'WebSocket IP Direct Mode • Ultra Low Latency'
-                                  : 'Powered by Firebase Cloud Firestore Sync',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: AppColors.textSecondary.withValues(alpha: 0.8),
+                            Flexible(
+                              child: Text(
+                                isWebSocket
+                                    ? 'WebSocket IP Direct Mode • Ultra Low Latency'
+                                    : 'Powered by Firebase Cloud Firestore Sync',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: AppColors.textSecondary.withValues(alpha: 0.8),
+                                ),
+                                textAlign: TextAlign.center,
+                                overflow: TextOverflow.ellipsis,
                               ),
-                              textAlign: TextAlign.center,
                             ),
                           ],
                         ),
@@ -213,12 +216,16 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
               color: isSelected ? color : AppColors.textSecondary,
             ),
             const SizedBox(width: 8),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 13,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                color: isSelected ? Colors.white : AppColors.textSecondary,
+            Flexible(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  color: isSelected ? Colors.white : AppColors.textSecondary,
+                ),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
               ),
             ),
           ],

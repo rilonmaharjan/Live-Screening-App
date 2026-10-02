@@ -1,5 +1,7 @@
 import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+
 import 'museum_poi.dart';
 
 class MuseumMapView extends StatefulWidget {
@@ -582,51 +584,58 @@ class _MuseumMapViewState extends State<MuseumMapView> with TickerProviderStateM
 
                       // Rating & Read More Action Button
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Row(
-                            children: [
-                              Icon(Icons.star_rounded, color: Colors.amber, size: isTablet ? 20 : 16),
-                              const SizedBox(width: 4),
-                              Text(
-                                '${poi.rating}',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                  fontSize: isTablet ? 15 : (isSmallPhone ? 12 : 13),
+                          Expanded(
+                            child: Row(
+                              children: [
+                                Icon(Icons.star_rounded, color: Colors.amber, size: isTablet ? 20 : 16),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '${poi.rating}',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                    fontSize: isTablet ? 15 : (isSmallPhone ? 12 : 13),
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                '• ${poi.zone}',
-                                style: TextStyle(
-                                  color: Colors.white38,
-                                  fontSize: isTablet ? 12 : 11,
+                                const SizedBox(width: 6),
+                                Flexible(
+                                  child: Text(
+                                    '• ${poi.zone}',
+                                    style: TextStyle(
+                                      color: Colors.white38,
+                                      fontSize: isTablet ? 12 : 11,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ),
-                              ),
-                            ],
-                          ),
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: poi.color,
-                              foregroundColor: Colors.white,
-                              padding: EdgeInsets.symmetric(
-                                horizontal: isTablet ? 18 : (isSmallPhone ? 12 : 16),
-                                vertical: isTablet ? 10 : (isSmallPhone ? 6 : 8),
-                              ),
-                              minimumSize: Size.zero,
-                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(isTablet ? 12 : 10),
-                              ),
+                              ],
                             ),
-                            onPressed: () => _openSidePanel(viewportSize, mapWidth, mapHeight),
-                            label: Icon(Icons.arrow_forward_rounded, size: isTablet ? 16 : 14),
-                            icon: Text(
-                              'Read More',
-                              style: TextStyle(
-                                fontSize: isTablet ? 13.0 : (isSmallPhone ? 11 : 12),
-                                fontWeight: FontWeight.bold,
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: poi.color,
+                                foregroundColor: Colors.white,
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: isTablet ? 18 : (isSmallPhone ? 12 : 16),
+                                  vertical: isTablet ? 10 : (isSmallPhone ? 6 : 8),
+                                ),
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(isTablet ? 12 : 10),
+                                ),
+                              ),
+                              onPressed: () => _openSidePanel(viewportSize, mapWidth, mapHeight),
+                              label: Icon(Icons.arrow_forward_rounded, size: isTablet ? 16 : 14),
+                              icon: Text(
+                                'Read More',
+                                style: TextStyle(
+                                  fontSize: isTablet ? 13.0 : (isSmallPhone ? 11 : 12),
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
                           ),
@@ -866,22 +875,26 @@ class _MuseumMapViewState extends State<MuseumMapView> with TickerProviderStateM
                         children: [
                           Icon(Icons.access_time_filled_rounded, color: Colors.tealAccent, size: isTablet ? 22 : 18),
                           const SizedBox(width: 12),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Operating Hours',
-                                style: TextStyle(fontSize: isTablet ? 11.5 : 10, color: Colors.white38),
-                              ),
-                              Text(
-                                poi.openHours,
-                                style: TextStyle(
-                                  fontSize: isTablet ? 14.5 : (isSmallPhone ? 11.5 : 13),
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Operating Hours',
+                                  style: TextStyle(fontSize: isTablet ? 11.5 : 10, color: Colors.white38),
                                 ),
-                              ),
-                            ],
+                                Text(
+                                  poi.openHours,
+                                  style: TextStyle(
+                                    fontSize: isTablet ? 14.5 : (isSmallPhone ? 11.5 : 13),
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                  softWrap: true,
+                                  overflow: TextOverflow.visible,
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                       ),

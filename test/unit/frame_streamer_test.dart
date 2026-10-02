@@ -79,6 +79,13 @@ void main() {
       final service = FakeBroadcastService();
       final streamer = FrameStreamerController(broadcastService: service);
 
+      tester.view.physicalSize = const Size(800, 1200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
       await tester.pumpWidget(
         Directionality(
           textDirection: TextDirection.ltr,

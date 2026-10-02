@@ -177,7 +177,8 @@ class WebSocketServerService implements IBroadcastService {
   }
 
   Future<void> stopServer() async {
-    for (final socket in _connectedClients) {
+    final sockets = _connectedClients.toList(growable: false);
+    for (final socket in sockets) {
       await socket.close();
     }
     _connectedClients.clear();
