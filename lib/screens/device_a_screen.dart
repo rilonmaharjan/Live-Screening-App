@@ -34,7 +34,6 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
 
   final TextEditingController _channelController = TextEditingController(text: 'live_stream');
   final List<String> _serverLogs = [];
-  final bool _showConnectionSheet = false;
   String _statusText = 'Initializing...';
   bool _isBroadcasting = false;
   int _clientCount = 0;
@@ -175,6 +174,12 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
         title: Text(
           isWebSocket ? 'Device A: Broadcaster' : 'Device A: Broadcaster',
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.info_outline_rounded),
+            onPressed: () => _showConnectionDialog(context),
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -351,10 +356,16 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(Icons.devices_rounded, size: 14, color: Colors.white38),
+                Icon(
+                  _isBroadcasting ? Icons.wifi_tethering_rounded : Icons.wifi_off_rounded,
+                  size: 14,
+                  color: _isBroadcasting ? Colors.tealAccent : Colors.white38,
+                ),
                 const SizedBox(width: 6),
                 Text(
-                  'Connected WebSocket Clients: $_clientCount',
+                  _isBroadcasting
+                      ? 'Connected WebSocket Clients: $_clientCount'
+                      : 'Broadcast is currently offline',
                   style: const TextStyle(
                     fontSize: 11,
                     color: Colors.white70,
@@ -363,6 +374,24 @@ class _DeviceABroadcasterScreenState extends State<DeviceABroadcasterScreen> {
                 ),
               ],
             ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Text(
+                'latest gesture events: ',
+                style: TextStyle(fontSize: 11, color: Colors.white54),
+              ),
+              Text(
+                '${_gestureTracker.recentGesturesLog.length}',
+                style: const TextStyle(
+                  fontSize: 11,
+                  color: Colors.tealAccent,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
           ),
         ],
       ),
