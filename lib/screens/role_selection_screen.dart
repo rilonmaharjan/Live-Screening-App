@@ -25,160 +25,158 @@ class _RoleSelectionScreenState extends State<RoleSelectionScreen> {
           color: AppColors.background,
         ),
         child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const SizedBox(height: 16),
-                // App Logo & Header
-                Center(
-                  child: Container(
-                    padding: const EdgeInsets.all(18),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: isWebSocket ? AppColors.cyanGradient : AppColors.primaryGradient,
-                      boxShadow: [
-                        BoxShadow(
-                          color: (isWebSocket ? AppColors.secondary : AppColors.primary).withValues(alpha: 0.5),
-                          blurRadius: 25,
-                          spreadRadius: 2,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight-50),
+                  child: IntrinsicHeight(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const SizedBox(height: 16),
+                        Center(
+                          child: Container(
+                            padding: const EdgeInsets.all(18),
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: isWebSocket ? AppColors.cyanGradient : AppColors.primaryGradient,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: (isWebSocket ? AppColors.secondary : AppColors.primary).withValues(alpha: 0.5),
+                                  blurRadius: 25,
+                                  spreadRadius: 2,
+                                ),
+                              ],
+                            ),
+                            child: Icon(
+                              isWebSocket ? Icons.lan_rounded : Icons.cloud_done_rounded,
+                              size: 48,
+                              color: Colors.white,
+                            ),
+                          ),
                         ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Live Screen Mirroring\n& Gesture Sync',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 26,
+                            fontWeight: FontWeight.w800,
+                            height: 1.2,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          isWebSocket
+                              ? 'Detect live taps & drags on Device A and mirror in real-time over Local Wi-Fi / IP WebSocket (Mobile, Web Browser, or Desktop).'
+                              : 'Detect live taps & drags on Device A and sync over Firebase Cloud Firestore across any internet network.',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 13,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: AppColors.surface,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: _buildModeTab(
+                                  mode: TransportMode.webSocket,
+                                  label: 'WebSocket (IP)',
+                                  icon: Icons.wifi_rounded,
+                                  color: AppColors.secondary,
+                                ),
+                              ),
+                              Expanded(
+                                child: _buildModeTab(
+                                  mode: TransportMode.firebase,
+                                  label: 'Firebase (Cloud)',
+                                  icon: Icons.cloud_outlined,
+                                  color: AppColors.primary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        _buildRoleCard(
+                          context,
+                          title: isWebSocket ? 'Device A: WebSocket Broadcaster' : 'Device A: Firebase Broadcaster',
+                          subtitle: isWebSocket
+                              ? 'Start local IP WebSocket server (ws://ip:port) and host built-in Web Viewer for web browsers.'
+                              : 'Stream screen frames and capture live touch/scroll gestures via Firebase Cloud Firestore.',
+                          badgeText: isWebSocket ? 'HOST / SENDER (LOCAL IP)' : 'HOST / SENDER (FIREBASE CLOUD)',
+                          badgeColor: isWebSocket ? AppColors.secondary : AppColors.primary,
+                          icon: Icons.phonelink_setup_rounded,
+                          gradient: isWebSocket ? AppColors.cyanGradient : AppColors.primaryGradient,
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => DeviceABroadcasterScreen(transportMode: _selectedMode),
+                              ),
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        _buildRoleCard(
+                          context,
+                          title: isWebSocket ? 'Device B: WebSocket Receiver' : 'Device B: Firebase Receiver',
+                          subtitle: isWebSocket
+                              ? 'Connect directly using Host IP address (e.g. 192.168.1.50:8080) for high-speed local screening.'
+                              : 'Connect via Firebase Channel ID to view Device A screen with live tap ripples and scroll indicators.',
+                          badgeText: isWebSocket ? 'VIEWER (WEBSOCKET IP)' : 'VIEWER (FIREBASE CLOUD)',
+                          badgeColor: isWebSocket ? AppColors.secondary : AppColors.primary,
+                          icon: Icons.desktop_windows_rounded,
+                          gradient: isWebSocket ? AppColors.cyanGradient : AppColors.primaryGradient,
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => DeviceBReceiverScreen(transportMode: _selectedMode),
+                              ),
+                            );
+                          },
+                        ),
+                        const Spacer(),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              isWebSocket ? Icons.bolt_rounded : Icons.cloud_done_rounded,
+                              size: 16,
+                              color: isWebSocket ? AppColors.secondary : AppColors.success,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              isWebSocket
+                                  ? 'WebSocket IP Direct Mode • Ultra Low Latency'
+                                  : 'Powered by Firebase Cloud Firestore Sync',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: AppColors.textSecondary.withValues(alpha: 0.8),
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
                       ],
                     ),
-                    child: Icon(
-                      isWebSocket ? Icons.lan_rounded : Icons.cloud_done_rounded,
-                      size: 48,
-                      color: Colors.white,
-                    ),
                   ),
                 ),
-                const SizedBox(height: 16),
-                const Text(
-                  'Live Screen Mirroring\n& Gesture Sync',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w800,
-                    height: 1.2,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  isWebSocket
-                      ? 'Detect live taps & drags on Device A and mirror in real-time over Local Wi-Fi / IP WebSocket (Mobile, Web Browser, or Desktop).'
-                      : 'Detect live taps & drags on Device A and sync over Firebase Cloud Firestore across any internet network.',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-                const SizedBox(height: 20),
-
-                // Transport Protocol Mode Selector Switcher
-                Container(
-                  padding: const EdgeInsets.all(4),
-                  decoration: BoxDecoration(
-                    color: AppColors.surface,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-                  ),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: _buildModeTab(
-                          mode: TransportMode.webSocket,
-                          label: 'WebSocket (IP)',
-                          icon: Icons.wifi_rounded,
-                          color: AppColors.secondary,
-                        ),
-                      ),
-                      Expanded(
-                        child: _buildModeTab(
-                          mode: TransportMode.firebase,
-                          label: 'Firebase (Cloud)',
-                          icon: Icons.cloud_outlined,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                const Spacer(),
-
-                // Role Options
-                _buildRoleCard(
-                  context,
-                  title: isWebSocket ? 'Device A: WebSocket Broadcaster' : 'Device A: Firebase Broadcaster',
-                  subtitle: isWebSocket
-                      ? 'Start local IP WebSocket server (ws://ip:port) and host built-in Web Viewer for web browsers.'
-                      : 'Stream screen frames and capture live touch/scroll gestures via Firebase Cloud Firestore.',
-                  badgeText: isWebSocket ? 'HOST / SENDER (LOCAL IP)' : 'HOST / SENDER (FIREBASE CLOUD)',
-                  badgeColor: isWebSocket ? AppColors.secondary : AppColors.primary,
-                  icon: Icons.phonelink_setup_rounded,
-                  gradient: isWebSocket ? AppColors.cyanGradient : AppColors.primaryGradient,
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => DeviceABroadcasterScreen(transportMode: _selectedMode),
-                      ),
-                    );
-                  },
-                ),
-
-                const SizedBox(height: 16),
-
-                _buildRoleCard(
-                  context,
-                  title: isWebSocket ? 'Device B: WebSocket Receiver' : 'Device B: Firebase Receiver',
-                  subtitle: isWebSocket
-                      ? 'Connect directly using Host IP address (e.g. 192.168.1.50:8080) for high-speed local screening.'
-                      : 'Connect via Firebase Channel ID to view Device A screen with live tap ripples and scroll indicators.',
-                  badgeText: isWebSocket ? 'VIEWER (WEBSOCKET IP)' : 'VIEWER (FIREBASE CLOUD)',
-                  badgeColor: isWebSocket ? AppColors.secondary : AppColors.primary,
-                  icon: Icons.desktop_windows_rounded,
-                  gradient: isWebSocket ? AppColors.cyanGradient : AppColors.primaryGradient,
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => DeviceBReceiverScreen(transportMode: _selectedMode),
-                      ),
-                    );
-                  },
-                ),
-
-                const Spacer(),
-
-                // Footer Info
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      isWebSocket ? Icons.bolt_rounded : Icons.cloud_done_rounded,
-                      size: 16,
-                      color: isWebSocket ? AppColors.secondary : AppColors.success,
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      isWebSocket
-                          ? 'WebSocket IP Direct Mode • Ultra Low Latency'
-                          : 'Powered by Firebase Cloud Firestore Sync',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textSecondary.withValues(alpha: 0.8),
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-              ],
-            ),
+              );
+            },
           ),
         ),
       ),
