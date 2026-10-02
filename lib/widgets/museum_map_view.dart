@@ -1,64 +1,185 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
-
-import '../models/museum_item.dart';
-import '../theme/app_theme.dart';
+import 'museum_poi.dart';
 
 class MuseumMapView extends StatefulWidget {
-  const MuseumMapView({super.key});
+  final List<MuseumPoi> pois;
+
+  const MuseumMapView({
+    super.key,
+    required this.pois,
+  });
 
   @override
   State<MuseumMapView> createState() => _MuseumMapViewState();
 }
 
-class _MuseumMapViewState extends State<MuseumMapView> with SingleTickerProviderStateMixin {
-  MuseumItem? _selectedItem;
-  MuseumItem? _detailedItem;
-  bool _showRightColumn = false;
-  late AnimationController _columnAnimController;
-  late Animation<Offset> _columnSlideAnimation;
+class _MuseumMapViewState extends State<MuseumMapView> with TickerProviderStateMixin {
+  MuseumPoi? _selectedPoi;
+  bool _showSidePanel = false;
 
+  // Zoom & Pan Controller
   final TransformationController _transformationController = TransformationController();
+  AnimationController? _zoomAnimationController;
+  Animation<Matrix4>? _zoomAnimation;
+
+  // Side Panel Animation Controller
+  late AnimationController _panelAnimationController;
+  late Animation<Offset> _panelSlideAnimation;
 
   @override
   void initState() {
     super.initState();
-    _columnAnimController = AnimationController(
+    _panelAnimationController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 320),
+      duration: const Duration(milliseconds: 300),
     );
-
-    _columnSlideAnimation = Tween<Offset>(
+    _panelSlideAnimation = Tween<Offset>(
       begin: const Offset(1.0, 0.0),
       end: Offset.zero,
     ).animate(CurvedAnimation(
-      parent: _columnAnimController,
+      parent: _panelAnimationController,
       curve: Curves.easeOutCubic,
     ));
 
-    // Default select Hospital first so user immediately sees interactive popup experience
-    _selectedItem = MuseumItem.sampleItems.first;
+    // Rebuild top-level info callout overlay on matrix zoom/pan
+    _transformationController.addListener(_onTransformationChanged);
+  }
+
+  void _onTransformationChanged() {
+    if (_selectedPoi != null && mounted) {
+      setState(() {});
+    }
   }
 
   @override
   void dispose() {
-    _columnAnimController.dispose();
+    _transformationController.removeListener(_onTransformationChanged);
+    _zoomAnimationController?.dispose();
+    _panelAnimationController.dispose();
     _transformationController.dispose();
     super.dispose();
   }
 
-  void _openDetails(MuseumItem item) {
+  void _selectPoi(MuseumPoi poi, Size viewportSize, double mapWidth, double mapHeight) {
+    if (_zoomAnimationController?.isAnimating == true) {
+      _zoomAnimationController!.stop();
+    }
     setState(() {
-      _detailedItem = item;
-      _showRightColumn = true;
+      _selectedPoi = poi;
     });
-    _columnAnimController.forward();
+    _zoomToPoi(poi, viewportSize, mapWidth, mapHeight);
   }
 
-  void _closeDetails() {
-    _columnAnimController.reverse().then((_) {
+  // Smooth camera panning that places ANY pin directly in the visible center of the screen
+  void _zoomToPoi(MuseumPoi poi, Size viewportSize, double mapWidth, double mapHeight) {
+    if (viewportSize.width == 0 || viewportSize.height == 0) return;
+
+    final double mapLeftOffset = (viewportSize.width - mapWidth) / 2;
+    final double mapTopOffset = (viewportSize.height - mapHeight) / 2;
+
+    final pinX = poi.dx * mapWidth;
+    final pinY = poi.dy * mapHeight;
+
+    // Responsive target scale factor
+    final bool isTablet = viewportSize.width >= 600;
+    final double targetScale = isTablet ? 1.6 : (viewportSize.width < 500 ? 1.85 : 1.6);
+
+    // Calculate dynamic horizontal center:
+    // If the side panel is open, center the pin in the remaining UNCOVERED left area of the screen
+    double targetScreenX = viewportSize.width / 2;
+    if (_showSidePanel) {
+      final double panelWidth = isTablet ? 380.0 : (viewportSize.width * 0.85);
+      final double visibleMapWidth = viewportSize.width - panelWidth;
+      targetScreenX = math.max(visibleMapWidth / 2, 70.0);
+    }
+
+    final double targetScreenY = viewportSize.height * 0.44;
+
+    // Exact matrix translation to center the pin on screen
+    final double translateX = targetScreenX - mapLeftOffset - (pinX * targetScale);
+    final double translateY = targetScreenY - mapTopOffset - (pinY * targetScale);
+
+    final endMatrix = Matrix4.identity()
+      // ignore: deprecated_member_use
+      ..translate(translateX, translateY, 0.0)
+      // ignore: deprecated_member_use
+      ..scale(targetScale, targetScale, 1.0);
+
+    _animateMatrixTo(endMatrix);
+  }
+
+  void _resetZoom() {
+    if (_zoomAnimationController?.isAnimating == true) {
+      _zoomAnimationController!.stop();
+    }
+    setState(() {
+      _selectedPoi = null;
+      _showSidePanel = false;
+    });
+    _panelAnimationController.reverse();
+    _animateMatrixTo(Matrix4.identity());
+  }
+
+  void _animateMatrixTo(Matrix4 targetMatrix) {
+    final Matrix4 startMatrix = _transformationController.value;
+    if (_zoomAnimationController?.isAnimating == true) {
+      _zoomAnimationController!.stop();
+    }
+    _zoomAnimationController?.dispose();
+
+    _zoomAnimationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    );
+
+    _zoomAnimation = Matrix4Tween(
+      begin: startMatrix,
+      end: targetMatrix,
+    ).animate(CurvedAnimation(
+      parent: _zoomAnimationController!,
+      curve: Curves.fastOutSlowIn,
+    ));
+
+    _zoomAnimation!.addListener(() {
+      if (mounted) {
+        // Updating value automatically notifies _transformationController listeners (_onTransformationChanged) once
+        _transformationController.value = _zoomAnimation!.value;
+      }
+    });
+
+    _zoomAnimationController!.forward();
+  }
+
+  void _openSidePanel(Size viewportSize, double mapWidth, double mapHeight) {
+    setState(() {
+      _showSidePanel = true;
+    });
+    _panelAnimationController.forward();
+    if (_selectedPoi != null) {
+      _zoomToPoi(_selectedPoi!, viewportSize, mapWidth, mapHeight);
+    }
+  }
+
+  void _closeSidePanel(Size viewportSize, double mapWidth, double mapHeight) {
+    _panelAnimationController.reverse().then((_) {
       if (mounted) {
         setState(() {
-          _showRightColumn = false;
+          _showSidePanel = false;
+        });
+        if (_selectedPoi != null) {
+          _zoomToPoi(_selectedPoi!, viewportSize, mapWidth, mapHeight);
+        }
+      }
+    });
+  }
+
+  void _dismissPoi(Size viewportSize, double mapWidth, double mapHeight) {
+    _panelAnimationController.reverse().then((_) {
+      if (mounted) {
+        setState(() {
+          _showSidePanel = false;
+          _selectedPoi = null;
         });
       }
     });
@@ -66,764 +187,816 @@ class _MuseumMapViewState extends State<MuseumMapView> with SingleTickerProvider
 
   @override
   Widget build(BuildContext context) {
-    final items = MuseumItem.sampleItems;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final viewportSize = Size(constraints.maxWidth, constraints.maxHeight);
 
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: Stack(
-        children: [
-          // 1. MAIN INTERACTIVE MAP AREA WITH PINS & ANCHORED POPUP (FULL SCREEN)
-          Positioned.fill(
-            child: GestureDetector(
-              onTap: () {
-                // Tap on empty space closes info popup if open
-                if (_selectedItem != null && !_showRightColumn) {
-                  setState(() => _selectedItem = null);
-                }
-              },
-              child: InteractiveViewer(
-                transformationController: _transformationController,
-                minScale: 0.8,
-                maxScale: 3.5,
-                boundaryMargin: const EdgeInsets.all(200),
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final mapWidth = constraints.maxWidth;
-                    final mapHeight = constraints.maxHeight;
+        // Entire map fits in viewport by default
+        const double imageAspectRatio = 675 / 1200;
+        double mapWidth = viewportSize.width;
+        double mapHeight = mapWidth / imageAspectRatio;
 
-                    return Stack(
-                      clipBehavior: Clip.none,
-                      children: [
-                        // Full Screen Base Map Image Asset with Fallback
-                        Positioned.fill(
-                          child: Container(
-                            decoration: const BoxDecoration(
-                              color: Color(0xFF131924),
-                            ),
-                            child: Image.asset(
-                              'assets/images/museum_map.png',
-                              fit: BoxFit.cover,
-                              width: mapWidth,
-                              height: mapHeight,
-                              errorBuilder: (context, error, stackTrace) {
-                                return _buildFallbackMapBackground();
-                              },
-                            ),
-                          ),
+        if (mapHeight > viewportSize.height) {
+          mapHeight = viewportSize.height;
+          mapWidth = mapHeight * imageAspectRatio;
+        }
+
+        // Sort POIs so selected pin is rendered LAST (highest z-index & frontmost touch target)
+        final sortedPois = List<MuseumPoi>.from(widget.pois);
+        if (_selectedPoi != null) {
+          sortedPois.removeWhere((p) => p.id == _selectedPoi!.id);
+          sortedPois.add(_selectedPoi!);
+        }
+
+        return Stack(
+          children: [
+            // Center zoomable map canvas
+            Center(
+              child: SizedBox(
+                width: mapWidth,
+                height: mapHeight,
+                child: InteractiveViewer(
+                  transformationController: _transformationController,
+                  minScale: 1.0,
+                  maxScale: 4.0,
+                  clipBehavior: Clip.none,
+                  boundaryMargin: const EdgeInsets.all(1200),
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      // Base Map Image
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: Image.asset(
+                          'assets/images/museum_map.jpg',
+                          width: mapWidth,
+                          height: mapHeight,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return _buildFallbackMap(mapWidth, mapHeight);
+                          },
                         ),
+                      ),
 
-                        // Map Zone Overlay Graphics & Grid Lines
-                        Positioned.fill(
-                          child: IgnorePointer(
-                            child: Container(
-                              decoration: BoxDecoration(
-                                border: Border.all(
-                                  color: AppColors.primaryLight.withValues(alpha: 0.2),
-                                  width: 1,
-                                ),
-                                gradient: LinearGradient(
-                                  begin: Alignment.topCenter,
-                                  end: Alignment.bottomCenter,
-                                  colors: [
-                                    Colors.black.withValues(alpha: 0.2),
-                                    Colors.transparent,
-                                    Colors.black.withValues(alpha: 0.3),
-                                  ],
-                                ),
-                              ),
+                      // Hotspot Pins on Map (sorted so active pin stays on top)
+                      ...sortedPois.map((poi) {
+                        final isSelected = _selectedPoi?.id == poi.id;
+                        final pinX = poi.dx * mapWidth;
+                        final pinY = poi.dy * mapHeight;
+
+                        return Positioned(
+                          left: pinX - 30,
+                          top: pinY - 50,
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => _selectPoi(poi, viewportSize, mapWidth, mapHeight),
+                            child: Padding(
+                              padding: const EdgeInsets.all(8.0),
+                              child: _buildPinMarker(poi, isSelected, viewportSize),
                             ),
                           ),
-                        ),
-
-                        // Interactive Location Pins
-                        ...items.map((item) {
-                          final posX = item.dx * mapWidth;
-                          final posY = item.dy * mapHeight;
-                          final isSelected = _selectedItem?.id == item.id;
-
-                          return Positioned(
-                            left: posX - 24,
-                            top: posY - 48,
-                            child: GestureDetector(
-                              onTap: () {
-                                setState(() {
-                                  _selectedItem = item;
-                                });
-                              },
-                              child: AnimatedScale(
-                                scale: isSelected ? 1.25 : 1.0,
-                                duration: const Duration(milliseconds: 200),
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    // Pin Badge with Icon
-                                    Container(
-                                      padding: const EdgeInsets.all(8),
-                                      decoration: BoxDecoration(
-                                        color: isSelected ? Colors.white : item.color,
-                                        shape: BoxShape.circle,
-                                        boxShadow: [
-                                          BoxShadow(
-                                            color: item.color.withValues(alpha: 0.6),
-                                            blurRadius: isSelected ? 14 : 6,
-                                            spreadRadius: isSelected ? 3 : 1,
-                                          ),
-                                        ],
-                                        border: Border.all(
-                                          color: isSelected ? item.color : Colors.white,
-                                          width: 2.5,
-                                        ),
-                                      ),
-                                      child: Icon(
-                                        item.icon,
-                                        size: 20,
-                                        color: isSelected ? item.color : Colors.white,
-                                      ),
-                                    ),
-
-                                    // Pin Pointer Tail
-                                    CustomPaint(
-                                      size: const Size(12, 8),
-                                      painter: _PinTailPainter(
-                                        isSelected ? Colors.white : item.color,
-                                      ),
-                                    ),
-
-                                    // Label Badge
-                                    const SizedBox(height: 2),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: Colors.black.withValues(alpha: 0.85),
-                                        borderRadius: BorderRadius.circular(10),
-                                        border: Border.all(color: item.color.withValues(alpha: 0.6)),
-                                      ),
-                                      child: Text(
-                                        item.name.split(' ').first,
-                                        style: TextStyle(
-                                          color: item.color,
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 10,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          );
-                        }),
-
-                        // ANCHORED INFO WINDOW POPUP ABOVE CLICKED ITEM
-                        if (_selectedItem != null)
-                          _buildAnchoredInfoWindow(
-                            _selectedItem!,
-                            mapWidth,
-                            mapHeight,
-                          ),
-                      ],
-                    );
-                  },
+                        );
+                      }),
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
 
-          // 2. COMPACT FLOATING TOP MENU UI OVERLAY
-          Positioned(
-            top: 12,
-            left: 12,
-            right: 12,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.8),
-                borderRadius: BorderRadius.circular(24),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
-                boxShadow: const [
-                  BoxShadow(color: Colors.black45, blurRadius: 10, offset: Offset(0, 4)),
+            // Top Horizontal Places Chips Row (Google Maps Style)
+            Positioned(
+              top: 12,
+              left: 12,
+              right: 12,
+              child: _buildTopPlacesChipsBar(viewportSize, mapWidth, mapHeight),
+            ),
+
+            // Unclipped Spacious Responsive Info Window Callout attached to screen position of selected pin
+            if (_selectedPoi != null && !_showSidePanel)
+              _buildResponsiveOverlayInfoWindow(_selectedPoi!, viewportSize, mapWidth, mapHeight),
+
+            // Zoom Floating Action Buttons
+            Positioned(
+              right: 14,
+              bottom: 20,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  FloatingActionButton.small(
+                    heroTag: 'zoom_reset',
+                    backgroundColor: const Color(0xFF1E293B),
+                    foregroundColor: Colors.tealAccent,
+                    onPressed: _resetZoom,
+                    tooltip: 'Reset Map View',
+                    child: const Icon(Icons.center_focus_strong_rounded, size: 20),
+                  ),
+                  const SizedBox(height: 8),
+                  FloatingActionButton.small(
+                    heroTag: 'zoom_in',
+                    backgroundColor: const Color(0xFF1E293B),
+                    foregroundColor: Colors.white,
+                    onPressed: () {
+                      final currentScale = _transformationController.value.getMaxScaleOnAxis();
+                      // ignore: deprecated_member_use
+                      final endMatrix = _transformationController.value.clone()..scale(1.4, 1.4, 1.0);
+                      if (currentScale < 3.8) _animateMatrixTo(endMatrix);
+                    },
+                    tooltip: 'Zoom In',
+                    child: const Icon(Icons.add, size: 20),
+                  ),
                 ],
               ),
-              child: Row(
-                children: [
+            ),
 
-                  // Horizontal Scrollable Quick Zone Selectors
-                  Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: items.map((item) {
-                          final isSelected = _selectedItem?.id == item.id;
-                          return Padding(
-                            padding: const EdgeInsets.only(right: 6),
-                            child: InkWell(
-                              onTap: () => setState(() => _selectedItem = item),
-                              borderRadius: BorderRadius.circular(14),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                                decoration: BoxDecoration(
-                                  color: isSelected
-                                      ? item.color
-                                      : AppColors.surfaceLight.withValues(alpha: 0.6),
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(
-                                    color: isSelected
-                                        ? Colors.white
-                                        : item.color.withValues(alpha: 0.5),
-                                  ),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(item.icon, size: 14, color: isSelected ? Colors.white : item.color),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      item.name.split(' ').first,
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.bold,
-                                        color: isSelected ? Colors.white : AppColors.textPrimary,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          );
-                        }).toList(),
+            // Responsive Right-Side Column / Drawer (Google Maps Style)
+            SlideTransition(
+              position: _panelSlideAnimation,
+              child: _selectedPoi != null
+                  ? Align(
+                      alignment: Alignment.centerRight,
+                      child: Container(
+                        width: viewportSize.width > 600 ? 380 : viewportSize.width * 0.88,
+                        height: double.infinity,
+                        color: const Color(0xFF0F172A),
+                        child: _buildRightSideDetailColumn(_selectedPoi!, viewportSize, mapWidth, mapHeight),
                       ),
+                    )
+                  : const SizedBox.shrink(),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // Horizontal Quick Places Selector Bar at Top
+  Widget _buildTopPlacesChipsBar(Size viewportSize, double mapWidth, double mapHeight) {
+    final bool isTablet = viewportSize.width >= 600;
+
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 10, vertical: isTablet ? 8 : 6),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A).withValues(alpha: 0.88),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xFF334155)),
+        boxShadow: const [
+          BoxShadow(color: Colors.black38, blurRadius: 10, offset: Offset(0, 4)),
+        ],
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        child: Row(
+          children: [
+            // "View All" Reset Chip
+            ActionChip(
+              avatar: Icon(
+                Icons.explore_rounded,
+                size: isTablet ? 18 : 16,
+                color: _selectedPoi == null ? Colors.tealAccent : Colors.white70,
+              ),
+              label: Text(
+                'All Places',
+                style: TextStyle(
+                  fontSize: isTablet ? 13.5 : 12,
+                  fontWeight: FontWeight.bold,
+                  color: _selectedPoi == null ? Colors.tealAccent : Colors.white,
+                ),
+              ),
+              backgroundColor:
+                  _selectedPoi == null ? Colors.teal.withValues(alpha: 0.3) : const Color(0xFF1E293B),
+              side: BorderSide(
+                color: _selectedPoi == null ? Colors.teal : const Color(0xFF334155),
+              ),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              onPressed: _resetZoom,
+            ),
+            const SizedBox(width: 8),
+
+            // Places Chips
+            ...widget.pois.map((poi) {
+              final isSelected = _selectedPoi?.id == poi.id;
+              return Padding(
+                padding: const EdgeInsets.only(right: 8.0),
+                child: ActionChip(
+                  avatar: Icon(
+                    poi.icon,
+                    size: isTablet ? 18 : 16,
+                    color: isSelected ? Colors.white : poi.color,
+                  ),
+                  label: Text(
+                    poi.tag,
+                    style: TextStyle(
+                      fontSize: isTablet ? 13.5 : 12,
+                      fontWeight: FontWeight.bold,
+                      color: isSelected ? Colors.white : Colors.white70,
                     ),
                   ),
-
-                  // Reset Map Zoom Center Button
-                  IconButton(
-                    constraints: const BoxConstraints(),
-                    padding: const EdgeInsets.all(6),
-                    icon: const Icon(Icons.center_focus_strong_rounded, size: 18, color: AppColors.primaryLight),
-                    tooltip: 'Reset View',
-                    onPressed: () => _transformationController.value = Matrix4.identity(),
+                  backgroundColor:
+                      isSelected ? poi.color : const Color(0xFF1E293B),
+                  side: BorderSide(
+                    color: isSelected ? Colors.white : poi.color.withValues(alpha: 0.5),
                   ),
-                ],
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  onPressed: () => _selectPoi(poi, viewportSize, mapWidth, mapHeight),
+                ),
+              );
+            }),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Unclipped Spacious Responsive Info Window Callout attached to screen position of selected pin
+  Widget _buildResponsiveOverlayInfoWindow(
+    MuseumPoi poi,
+    Size viewportSize,
+    double mapWidth,
+    double mapHeight,
+  ) {
+    final Matrix4 matrix = _transformationController.value;
+    final double scale = matrix.getMaxScaleOnAxis();
+    final double tx = matrix.storage[12];
+    final double ty = matrix.storage[13];
+
+    // Static offset of SizedBox(mapWidth, mapHeight) inside Center
+    final double mapLeftOffset = (viewportSize.width - mapWidth) / 2;
+    final double mapTopOffset = (viewportSize.height - mapHeight) / 2;
+
+    final double pinX = poi.dx * mapWidth;
+    final double pinY = poi.dy * mapHeight;
+
+    // Precise screen coordinates of the selected pin tip on top-level Stack
+    final double screenPinX = mapLeftOffset + (pinX * scale) + tx;
+    final double screenPinY = mapTopOffset + (pinY * scale) + ty;
+
+    // Responsive Breakpoint Sizing (Enlarged Card Dimensions & Readable Typography)
+    final bool isSmallPhone = viewportSize.width < 420;
+    final bool isTablet = viewportSize.width >= 600;
+
+    // Significantly Enlarged Card Width & Constraints
+    final double cardWidth = isTablet
+        ? math.min(viewportSize.width * 0.55, 430.0)
+        : (isSmallPhone ? math.min(viewportSize.width * 0.90, 320.0) : math.min(viewportSize.width * 0.88, 350.0));
+
+    final double maxCardHeight = isTablet ? viewportSize.height * 0.52 : viewportSize.height * 0.44;
+
+    // Prominent pointer arrow dimensions
+    final double arrowWidth = isTablet ? 26.0 : 22.0;
+    final double arrowHeight = isTablet ? 15.0 : 13.0;
+
+    // Horizontally center card over screenPinX, clamped safely inside screen edges
+    double left = screenPinX - (cardWidth / 2);
+    if (left < 14) left = 14;
+    if (left + cardWidth > viewportSize.width - 14) {
+      left = viewportSize.width - cardWidth - 14;
+    }
+
+    // Determine vertical placement: place card above pin tip if space allows
+    final double pinTopY = screenPinY - (isTablet ? 54.0 : 44.0);
+    bool placeAbove = pinTopY > (maxCardHeight + 70);
+
+    // Pointer arrow offset relative to card left edge so callout arrow points EXACTLY to pin tip
+    double arrowLeftOffset = (screenPinX - left - (arrowWidth / 2)).clamp(18.0, cardWidth - 36.0);
+
+    return Positioned(
+      left: left,
+      top: placeAbove ? null : (screenPinY + 10.0),
+      bottom: placeAbove ? (viewportSize.height - pinTopY + 2.0) : null,
+      child: Material(
+        color: Colors.transparent,
+        child: SizedBox(
+          width: cardWidth,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (!placeAbove)
+                Padding(
+                  padding: EdgeInsets.only(left: arrowLeftOffset),
+                  child: CustomPaint(
+                    size: Size(arrowWidth, arrowHeight),
+                    painter: _InvertedTrianglePainter(color: poi.color),
+                  ),
+                ),
+
+              // Main Info Window Card with Spacious Layout
+              Container(
+                constraints: BoxConstraints(maxHeight: maxCardHeight),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1E293B),
+                  borderRadius: BorderRadius.circular(isTablet ? 22 : 18),
+                  border: Border.all(color: poi.color, width: 2.2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: poi.color.withValues(alpha: 0.45),
+                      blurRadius: isTablet ? 24 : 20,
+                      spreadRadius: 2,
+                    ),
+                    const BoxShadow(
+                      color: Colors.black54,
+                      blurRadius: 16,
+                      offset: Offset(0, 6),
+                    )
+                  ],
+                ),
+                padding: EdgeInsets.all(isTablet ? 20.0 : (isSmallPhone ? 12.0 : 16.0)),
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Top Row: Category tag, Icon & Close
+                      Row(
+                        children: [
+                          Container(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: isTablet ? 12 : 9,
+                              vertical: isTablet ? 5 : 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: poi.color.withValues(alpha: 0.22),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(poi.icon, size: isTablet ? 16 : 13, color: poi.color),
+                                const SizedBox(width: 5),
+                                Text(
+                                  poi.category.toUpperCase(),
+                                  style: TextStyle(
+                                    fontSize: isTablet ? 12 : (isSmallPhone ? 10 : 11),
+                                    fontWeight: FontWeight.bold,
+                                    color: poi.color,
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Spacer(),
+                          GestureDetector(
+                            onTap: () => _dismissPoi(viewportSize, mapWidth, mapHeight),
+                            child: Container(
+                              padding: const EdgeInsets.all(4),
+                              decoration: const BoxDecoration(
+                                color: Color(0xFF0F172A),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(Icons.close_rounded, size: isTablet ? 22 : 18, color: Colors.white70),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+
+                      // Title
+                      Text(
+                        poi.name,
+                        style: TextStyle(
+                          fontSize: isTablet ? 20.0 : (isSmallPhone ? 15 : 17),
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white,
+                          letterSpacing: -0.3,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 6),
+
+                      // Short Description
+                      Text(
+                        poi.shortDescription,
+                        style: TextStyle(
+                          fontSize: isTablet ? 14.5 : (isSmallPhone ? 11.5 : 13),
+                          color: Colors.white70,
+                          height: 1.42,
+                        ),
+                        maxLines: isTablet ? 3 : 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Rating & Read More Action Button
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.star_rounded, color: Colors.amber, size: isTablet ? 20 : 16),
+                              const SizedBox(width: 4),
+                              Text(
+                                '${poi.rating}',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                  fontSize: isTablet ? 15 : (isSmallPhone ? 12 : 13),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                '• ${poi.zone}',
+                                style: TextStyle(
+                                  color: Colors.white38,
+                                  fontSize: isTablet ? 12 : 11,
+                                ),
+                              ),
+                            ],
+                          ),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: poi.color,
+                              foregroundColor: Colors.white,
+                              padding: EdgeInsets.symmetric(
+                                horizontal: isTablet ? 18 : (isSmallPhone ? 12 : 16),
+                                vertical: isTablet ? 10 : (isSmallPhone ? 6 : 8),
+                              ),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(isTablet ? 12 : 10),
+                              ),
+                            ),
+                            onPressed: () => _openSidePanel(viewportSize, mapWidth, mapHeight),
+                            label: Icon(Icons.arrow_forward_rounded, size: isTablet ? 16 : 14),
+                            icon: Text(
+                              'Read More',
+                              style: TextStyle(
+                                fontSize: isTablet ? 13.0 : (isSmallPhone ? 11 : 12),
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
               ),
+
+              if (placeAbove)
+                Padding(
+                  padding: EdgeInsets.only(left: arrowLeftOffset),
+                  child: CustomPaint(
+                    size: Size(arrowWidth, arrowHeight),
+                    painter: _TrianglePainter(color: poi.color),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPinMarker(MuseumPoi poi, bool isSelected, Size viewportSize) {
+    final bool isTablet = viewportSize.width >= 600;
+
+    return AnimatedScale(
+      scale: isSelected ? 1.35 : 1.0,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOutBack,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: EdgeInsets.symmetric(
+              horizontal: isTablet ? 12 : 10,
+              vertical: isTablet ? 6 : 5,
+            ),
+            decoration: BoxDecoration(
+              color: isSelected ? poi.color : const Color(0xFF1E293B),
+              borderRadius: BorderRadius.circular(isTablet ? 16 : 14),
+              border: Border.all(
+                color: isSelected ? Colors.white : poi.color,
+                width: isSelected ? 2.2 : 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: (isSelected ? poi.color : Colors.black).withValues(alpha: isSelected ? 0.65 : 0.4),
+                  blurRadius: isSelected ? 16 : 6,
+                  spreadRadius: isSelected ? 3 : 0,
+                  offset: const Offset(0, 3),
+                )
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  poi.icon,
+                  size: isTablet ? 16 : 14,
+                  color: isSelected ? Colors.white : poi.color,
+                ),
+                const SizedBox(width: 5),
+                Text(
+                  poi.tag,
+                  style: TextStyle(
+                    fontSize: isTablet ? 11.5 : 10,
+                    fontWeight: FontWeight.bold,
+                    color: isSelected ? Colors.white : Colors.white70,
+                  ),
+                ),
+              ],
             ),
           ),
-
-          // 3. GOOGLE MAPS STYLE RIGHT SIDE DETAILED COLUMN / DRAWER
-          if (_showRightColumn && _detailedItem != null)
-            Positioned(
-              top: 0,
-              bottom: 0,
-              right: 0,
-              width: MediaQuery.of(context).size.width > 700 ? 420 : MediaQuery.of(context).size.width * 0.85,
-              child: SlideTransition(
-                position: _columnSlideAnimation,
-                child: _buildGoogleStyleDetailColumn(_detailedItem!),
-              ),
+          CustomPaint(
+            size: Size(isTablet ? 14 : 12, isTablet ? 9 : 8),
+            painter: _TrianglePainter(
+              color: isSelected ? poi.color : const Color(0xFF1E293B),
             ),
+          ),
         ],
       ),
     );
   }
 
-  // ANCHORED INFO WINDOW POPUP
-  Widget _buildAnchoredInfoWindow(MuseumItem item, double mapWidth, double mapHeight) {
-    final posX = item.dx * mapWidth;
-    final posY = item.dy * mapHeight;
+  Widget _buildRightSideDetailColumn(
+    MuseumPoi poi,
+    Size viewportSize,
+    double mapWidth,
+    double mapHeight,
+  ) {
+    final bool isSmallPhone = viewportSize.width < 400;
+    final bool isTablet = viewportSize.width >= 600;
 
-    // Constrain popup horizontally so it doesn't overflow edge of map
-    double popupLeft = posX - 140;
-    if (popupLeft < 10) popupLeft = 10;
-    if (popupLeft + 280 > mapWidth - 10) popupLeft = mapWidth - 290;
-
-    double popupTop = posY - 185;
-    if (popupTop < 10) popupTop = posY + 50; // Show below if too near top edge
-
-    return Positioned(
-      left: popupLeft,
-      top: popupTop,
-      child: Material(
-        color: Colors.transparent,
-        child: Container(
-          width: 280,
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1E2430),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: item.color.withValues(alpha: 0.6), width: 1.5),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.7),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
+    return Scaffold(
+      backgroundColor: const Color(0xFF0F172A),
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Top Bar with Close Button
+            Container(
+              padding: EdgeInsets.symmetric(
+                horizontal: isTablet ? 20 : 14,
+                vertical: isTablet ? 14 : 10,
               ),
-              BoxShadow(
-                color: item.color.withValues(alpha: 0.2),
-                blurRadius: 10,
+              decoration: const BoxDecoration(
+                color: Color(0xFF1E293B),
+                border: Border(bottom: BorderSide(color: Color(0xFF334155))),
               ),
-            ],
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header Row: Category Badge & Close Button
-              Row(
+              child: Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding: EdgeInsets.all(isTablet ? 8 : 6),
                     decoration: BoxDecoration(
-                      color: item.color.withValues(alpha: 0.2),
-                      borderRadius: BorderRadius.circular(6),
-                      border: Border.all(color: item.color.withValues(alpha: 0.5)),
+                      color: poi.color.withValues(alpha: 0.2),
+                      shape: BoxShape.circle,
                     ),
-                    child: Text(
-                      item.category.toUpperCase(),
-                      style: TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.bold,
-                        color: item.color,
-                      ),
-                    ),
+                    child: Icon(poi.icon, size: isTablet ? 22 : 18, color: poi.color),
                   ),
-                  const Spacer(),
-                  GestureDetector(
-                    onTap: () => setState(() => _selectedItem = null),
-                    child: const Icon(Icons.close_rounded, size: 18, color: AppColors.textSecondary),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-
-              // Title with Icon
-              Row(
-                children: [
-                  Icon(item.icon, color: item.color, size: 20),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      item.name,
-                      style: const TextStyle(
-                        color: Colors.white,
+                      poi.name,
+                      style: TextStyle(
+                        fontSize: isTablet ? 17 : (isSmallPhone ? 13 : 15),
                         fontWeight: FontWeight.bold,
-                        fontSize: 14,
+                        color: Colors.white,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 6),
-
-              // Short Description
-              Text(
-                item.shortDescription,
-                style: const TextStyle(
-                  color: AppColors.textSecondary,
-                  fontSize: 12,
-                  height: 1.3,
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 12),
-
-              // Action Buttons Row: Read More Button
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      const Icon(Icons.star_rounded, color: Colors.amber, size: 16),
-                      const SizedBox(width: 3),
-                      Text(
-                        '${item.rating}',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
-                      ),
-                      Text(
-                        ' (${item.reviewCount})',
-                        style: const TextStyle(
-                          color: AppColors.textSecondary,
-                          fontSize: 11,
-                        ),
-                      ),
-                    ],
-                  ),
-                  ElevatedButton.icon(
-                    onPressed: () => _openDetails(item),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: item.color,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      elevation: 2,
-                    ),
-                    icon: const Text(
-                      'Read More',
-                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-                    ),
-                    label: const Icon(Icons.arrow_forward_rounded, size: 14),
+                  IconButton(
+                    onPressed: () => _closeSidePanel(viewportSize, mapWidth, mapHeight),
+                    icon: Icon(Icons.close_rounded, size: isTablet ? 24 : 20, color: Colors.white),
+                    tooltip: 'Close details',
                   ),
                 ],
               ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+            ),
 
-  // GOOGLE MAPS STYLE RIGHT SIDE DETAILED COLUMN
-  Widget _buildGoogleStyleDetailColumn(MuseumItem item) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.8),
-            blurRadius: 25,
-            spreadRadius: 5,
-          ),
-        ],
-        border: Border(
-          left: BorderSide(color: item.color.withValues(alpha: 0.4), width: 2),
-        ),
-      ),
-      child: Column(
-        children: [
-          // 1. Top Cover Header Banner with Action Buttons & Close
-          Stack(
-            children: [
-              Container(
-                height: 160,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [item.color.withValues(alpha: 0.8), AppColors.surface],
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                  ),
-                ),
-                child: Center(
-                  child: Icon(
-                    item.icon,
-                    size: 72,
-                    color: Colors.white.withValues(alpha: 0.25),
-                  ),
-                ),
-              ),
-              Positioned.fill(
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        Colors.black.withValues(alpha: 0.4),
-                        Colors.transparent,
-                        AppColors.surface,
-                      ],
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                    ),
-                  ),
-                ),
-              ),
-
-              // Title & Category Badge over Banner
-              Positioned(
-                bottom: 12,
-                left: 16,
-                right: 16,
+            // Detailed Content Scrollable Column
+            Expanded(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.all(isTablet ? 24 : (isSmallPhone ? 14 : 18)),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    // Header Banner Card
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      width: double.infinity,
+                      padding: EdgeInsets.all(isTablet ? 22 : (isSmallPhone ? 14 : 18)),
                       decoration: BoxDecoration(
-                        color: item.color,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        item.category.toUpperCase(),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 10,
+                        gradient: LinearGradient(
+                          colors: [
+                            poi.color.withValues(alpha: 0.35),
+                            const Color(0xFF1E293B),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
                         ),
+                        borderRadius: BorderRadius.circular(isTablet ? 20 : 16),
+                        border: Border.all(color: poi.color.withValues(alpha: 0.4)),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      item.name,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 20,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              // Close Button ('X')
-              Positioned(
-                top: 12,
-                right: 12,
-                child: CircleAvatar(
-                  backgroundColor: Colors.black.withValues(alpha: 0.6),
-                  child: IconButton(
-                    icon: const Icon(Icons.close_rounded, color: Colors.white),
-                    onPressed: _closeDetails,
-                  ),
-                ),
-              ),
-            ],
-          ),
-
-          // 2. Scrollable Body Content
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                // Star Rating & Review Header Row
-                Row(
-                  children: [
-                    const Icon(Icons.star_rounded, color: Colors.amber, size: 22),
-                    const SizedBox(width: 4),
-                    Text(
-                      '${item.rating}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                        color: Colors.white,
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(
-                      '(${item.reviewCount} Google reviews)',
-                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 13),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-
-                // Quick Action Buttons Row (Google Maps style)
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
-                  children: [
-                    _buildGoogleActionButton(Icons.directions_rounded, 'Directions', item.color),
-                    _buildGoogleActionButton(Icons.call_rounded, 'Call Info', item.color),
-                    _buildGoogleActionButton(Icons.headphones_rounded, 'Audio Guide', item.color),
-                    _buildGoogleActionButton(Icons.bookmark_border_rounded, 'Save', item.color),
-                    _buildGoogleActionButton(Icons.share_rounded, 'Share', item.color),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                const Divider(),
-
-                // Location & Hours Cards
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: CircleAvatar(
-                    backgroundColor: AppColors.surfaceLight,
-                    child: Icon(Icons.layers_rounded, color: item.color),
-                  ),
-                  title: const Text('Floor Level', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                  subtitle: Text(item.floorLevel, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-                ),
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const CircleAvatar(
-                    backgroundColor: AppColors.surfaceLight,
-                    child: Icon(Icons.access_time_rounded, color: AppColors.success),
-                  ),
-                  title: const Text('Operating Hours', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                  subtitle: Text(item.openingHours, style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
-                ),
-                const Divider(),
-
-                // Full Detailed Description Section
-                const Text(
-                  'About this Attraction',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  item.fullDescription,
-                  style: const TextStyle(
-                    color: AppColors.textSecondary,
-                    fontSize: 13,
-                    height: 1.5,
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // Key Highlights List
-                const Text(
-                  'Key Highlights',
-                  style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 15,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                ...item.highlights.map(
-                  (hl) => Padding(
-                    padding: const EdgeInsets.only(bottom: 6),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Icon(Icons.check_circle_rounded, color: item.color, size: 18),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            hl,
-                            style: const TextStyle(color: AppColors.textPrimary, fontSize: 13),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                const Divider(),
-
-                // Visitor Reviews Section
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text(
-                      'Visitor Reviews',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white),
-                    ),
-                    TextButton(
-                      onPressed: () {},
-                      child: const Text('Write Review', style: TextStyle(color: AppColors.primaryLight)),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                ...item.reviews.map(
-                  (rev) => Container(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: AppColors.background,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            CircleAvatar(
-                              radius: 12,
-                              backgroundColor: item.color.withValues(alpha: 0.3),
-                              child: Text(
-                                rev['user']![0],
-                                style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: item.color),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: poi.color,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  poi.category,
+                                  style: TextStyle(
+                                    fontSize: isTablet ? 12 : (isSmallPhone ? 10 : 11),
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                  ),
+                                ),
                               ),
+                              const Spacer(),
+                              Icon(Icons.star_rounded, color: Colors.amber, size: isTablet ? 20 : 16),
+                              const SizedBox(width: 4),
+                              Text(
+                                '${poi.rating}',
+                                style: TextStyle(
+                                  fontSize: isTablet ? 15 : (isSmallPhone ? 12 : 14),
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            poi.name,
+                            style: TextStyle(
+                              fontSize: isTablet ? 22 : (isSmallPhone ? 16 : 19),
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
                             ),
-                            const SizedBox(width: 8),
-                            Text(
-                              rev['user']!,
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white),
-                            ),
-                            const Spacer(),
-                            const Icon(Icons.star_rounded, color: Colors.amber, size: 14),
-                            Text(
-                              rev['rating']!,
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.white),
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              Icon(Icons.location_on_rounded, size: isTablet ? 16 : 13, color: Colors.white60),
+                              const SizedBox(width: 4),
+                              Text(
+                                poi.zone,
+                                style: TextStyle(
+                                  fontSize: isTablet ? 13 : (isSmallPhone ? 11 : 12),
+                                  color: Colors.white70,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+
+                    // Hours & Quick Info
+                    Container(
+                      padding: EdgeInsets.all(isTablet ? 16 : 12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1E293B),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFF334155)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.access_time_filled_rounded, color: Colors.tealAccent, size: isTablet ? 22 : 18),
+                          const SizedBox(width: 12),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Operating Hours',
+                                style: TextStyle(fontSize: isTablet ? 11.5 : 10, color: Colors.white38),
+                              ),
+                              Text(
+                                poi.openHours,
+                                style: TextStyle(
+                                  fontSize: isTablet ? 14.5 : (isSmallPhone ? 11.5 : 13),
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+
+                    // Detailed Description Header
+                    Text(
+                      'Overview',
+                      style: TextStyle(
+                        fontSize: isTablet ? 17 : 15,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      poi.fullDescription,
+                      style: TextStyle(
+                        fontSize: isTablet ? 14.5 : (isSmallPhone ? 12 : 13.5),
+                        color: Colors.white70,
+                        height: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+
+                    // Key Highlights List
+                    Text(
+                      'Key Highlights',
+                      style: TextStyle(
+                        fontSize: isTablet ? 17 : 15,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    ...poi.highlights.map(
+                      (item) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: Row(
+                          children: [
+                            Icon(Icons.check_circle_rounded, size: isTablet ? 18 : 16, color: poi.color),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                item,
+                                style: TextStyle(
+                                  fontSize: isTablet ? 14 : (isSmallPhone ? 11.5 : 12.5),
+                                  color: Colors.white70,
+                                ),
+                              ),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 6),
-                        Text(
-                          rev['comment']!,
-                          style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+
+                    // Action Buttons Row (Google Maps style)
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: poi.color,
+                              foregroundColor: Colors.white,
+                              padding: EdgeInsets.symmetric(vertical: isTablet ? 14 : 10),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            onPressed: () {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Navigating to ${poi.name}...'),
+                                  backgroundColor: const Color(0xFF1E293B),
+                                ),
+                              );
+                            },
+                            icon: Icon(Icons.directions_rounded, size: isTablet ? 20 : 16),
+                            label: Text(
+                              'Directions',
+                              style: TextStyle(fontSize: isTablet ? 14 : (isSmallPhone ? 11 : 13), fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: Colors.tealAccent,
+                            side: const BorderSide(color: Colors.teal),
+                            padding: EdgeInsets.symmetric(
+                              vertical: isTablet ? 14 : 10,
+                              horizontal: isTablet ? 18 : 14,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          onPressed: () {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Saved ${poi.name} to favorites!'),
+                                backgroundColor: const Color(0xFF1E293B),
+                              ),
+                            );
+                          },
+                          child: Icon(Icons.bookmark_add_rounded, size: isTablet ? 22 : 18),
                         ),
                       ],
                     ),
-                  ),
+                    const SizedBox(height: 30),
+                  ],
                 ),
-                const SizedBox(height: 20),
-              ],
-            ),
-          ),
-
-          // Bottom Action Button
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.4),
-                  blurRadius: 10,
-                  offset: const Offset(0, -4),
-                ),
-              ],
-            ),
-            child: SizedBox(
-              width: double.infinity,
-              height: 48,
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Navigating to ${item.name}...'),
-                      backgroundColor: item.color,
-                    ),
-                  );
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: item.color,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                ),
-                icon: const Icon(Icons.navigation_rounded),
-                label: const Text('Start AR Navigation to Zone', style: TextStyle(fontWeight: FontWeight.bold)),
               ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildGoogleActionButton(IconData icon, String label, Color color) {
-    return InkWell(
-      onTap: () {},
-      borderRadius: BorderRadius.circular(10),
-      child: Padding(
-        padding: const EdgeInsets.all(6),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.15),
-                shape: BoxShape.circle,
-                border: Border.all(color: color.withValues(alpha: 0.4)),
-              ),
-              child: Icon(icon, color: color, size: 18),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              label,
-              style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600),
             ),
           ],
         ),
@@ -831,73 +1004,64 @@ class _MuseumMapViewState extends State<MuseumMapView> with SingleTickerProvider
     );
   }
 
-  Widget _buildFallbackMapBackground() {
+  Widget _buildFallbackMap(double width, double height) {
     return Container(
-      color: const Color(0xFF1B222E),
-      child: CustomPaint(
-        painter: _MapCanvasBackgroundPainter(),
+      width: width,
+      height: height,
+      color: const Color(0xFF1E293B),
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: const [
+            Icon(Icons.map_rounded, size: 64, color: Colors.teal),
+            SizedBox(height: 12),
+            Text(
+              'Museum Floor Map',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _PinTailPainter extends CustomPainter {
+class _TrianglePainter extends CustomPainter {
   final Color color;
-  _PinTailPainter(this.color);
+
+  _TrianglePainter({required this.color});
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-
+    final paint = Paint()..color = color;
     final path = Path()
       ..moveTo(0, 0)
       ..lineTo(size.width / 2, size.height)
       ..lineTo(size.width, 0)
       ..close();
-
     canvas.drawPath(path, paint);
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+  bool shouldRepaint(covariant _TrianglePainter oldDelegate) => oldDelegate.color != color;
 }
 
-class _MapCanvasBackgroundPainter extends CustomPainter {
+class _InvertedTrianglePainter extends CustomPainter {
+  final Color color;
+
+  _InvertedTrianglePainter({required this.color});
+
   @override
   void paint(Canvas canvas, Size size) {
-    final gridPaint = Paint()
-      ..color = Colors.white.withValues(alpha: 0.05)
-      ..strokeWidth = 1.0;
-
-    const gridStep = 40.0;
-    for (double x = 0; x < size.width; x += gridStep) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
-    }
-    for (double y = 0; y < size.height; y += gridStep) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
-    }
-
-    final pathPaint = Paint()
-      ..color = Colors.amber.withValues(alpha: 0.25)
-      ..strokeWidth = 8.0
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-
+    final paint = Paint()..color = color;
     final path = Path()
-      ..moveTo(size.width * 0.2, size.height * 0.3)
-      ..lineTo(size.width * 0.5, size.height * 0.45)
-      ..lineTo(size.width * 0.75, size.height * 0.25)
-      ..moveTo(size.width * 0.5, size.height * 0.45)
-      ..lineTo(size.width * 0.25, size.height * 0.65)
-      ..lineTo(size.width * 0.78, size.height * 0.68)
-      ..moveTo(size.width * 0.25, size.height * 0.65)
-      ..lineTo(size.width * 0.5, size.height * 0.85);
-
-    canvas.drawPath(path, pathPaint);
+      ..moveTo(size.width / 2, 0)
+      ..lineTo(0, size.height)
+      ..lineTo(size.width, size.height)
+      ..close();
+    canvas.drawPath(path, paint);
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _InvertedTrianglePainter oldDelegate) => oldDelegate.color != color;
 }

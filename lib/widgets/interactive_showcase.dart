@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:rndscreeningap/widgets/museum_poi.dart';
 
 import '../theme/app_theme.dart';
 import 'museum_map_view.dart';
@@ -145,7 +146,7 @@ class _InteractiveShowcaseAppState extends State<InteractiveShowcaseApp> {
                 _buildScrollFeedTab(),
                 _buildControlsTab(),
                 _buildDrawingPadTab(),
-                const MuseumMapView(),
+                MuseumMapView(pois: MuseumPoi.samplePois),
               ],
             ),
           ),
